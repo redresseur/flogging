@@ -1,25 +1,70 @@
 package flogging
 
 import (
+	"context"
 	"fmt"
-	structure "github.com/redresseur/utils/sturcture"
+	"github.com/redresseur/utils/ioutils"
+	"github.com/redresseur/utils/sturcture"
+	"io"
+	"io/ioutil"
 	"os"
+	"path"
+	"regexp"
 	"sync/atomic"
 	"time"
 )
 
-const DATE_FORMAT = "2006-01-02"
-
 const (
-	MODEL_DAY = iota
-	MODEL_SIZE
+	DATE_DAY_FORMAT    = "2006-01-02"
+	DATE_SECOND_FORMAT = "2006_01_02_15_04_05"
+	log_suffix         = `.log`
 )
 
-type Writer struct {
-	data *structure.Queue
+func now() time.Time {
+	t, _ := time.Parse(DATE_DAY_FORMAT, time.Now().Format(DATE_DAY_FORMAT))
+	return t
 }
 
-func (w *Writer) Write(p []byte) (n int, err error) {
+type WriterConfig struct {
+	Dir          string // path : the log directory
+	Prefix       string // the log prefix
+	Model        string // model: date or size
+	MaxSize      int64  // maxSize: the max size of any file
+	MaxFileCount int    // maxFileCount: the number of saved files
+}
+
+// Note: if the model is date, the maxSize and maxFileCount are not necessary.
+func NewWriter(ctx context.Context, config *WriterConfig) (w io.Writer, err error) {
+	if _, err = ioutils.CreateDirIfMissing(config.Dir); err != nil {
+		return
+	}
+
+	wt := &writer{
+		//  the default of the signal capacity is 1
+		data:         structure.NewQueue(1),
+		WriterConfig: config,
+	}
+
+	wCtx, cancel := context.WithCancel(ctx)
+	wt.ctx = context.WithValue(wCtx, wt, cancel)
+
+	if wt.fbs, err = newFileBean(wt.Dir, wt.Prefix); err != nil {
+		return
+	}
+
+	wt.write()
+	return wt, nil
+}
+
+type writer struct {
+	data *structure.Queue
+	*WriterConfig
+	fileDate time.Time
+	fbs      *fileBean
+	ctx      context.Context
+}
+
+func (w *writer) Write(p []byte) (n int, err error) {
 	buffer := make([]byte, len(p), len(p)+1)
 	copy(buffer, p)
 	w.data.Push(buffer)
@@ -27,164 +72,148 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func (w *Writer) Sync() error {
+func (w *writer) Sync() error {
 	w.data.SingleUP(true)
 	return nil
 }
 
-type WriteFile struct {
-	data     *structure.Queue
-	name string
-	model    int
-	fileDate time.Time
-	fbs      *fileBean
+func (w *writer) Close() error {
+	if v := w.ctx.Value(w); v != nil {
+		if cancel, ok := v.(context.CancelFunc); ok {
+			cancel()
+		}
+	}
+
+	return nil
 }
 
-func GetWriteFile(data *structure.Queue, name string) *WriteFile {
-	return &WriteFile{data: data, name: name}
+func (w *writer) flush() {
+	for v := w.data.Pop(); v != nil; {
+		if err := w.fileCheck(); err != nil {
+			fmt.Printf("[file.Check] failure: %v", err)
+			continue
+		}
+
+		n, err := w.fbs.Write(v.([]byte))
+		if err != nil {
+			fmt.Printf("[file.Write] failure: %v", err)
+			continue
+		}
+		w.fbs.addSize(int64(n))
+		v = w.data.Pop()
+	}
+
+	return
 }
 
-func (wf *WriteFile) StartSizeWrite(maxSize int64, maxFileCont int) {
-	wf.model = MODEL_SIZE
-	wf.fbs = newFileBean(wf.name, maxSize, maxFileCont)
-
-	wf.write()
-}
-
-func (wf *WriteFile) StartDateWrite() {
-	wf.model = MODEL_DAY
-	wf.fbs = newFileBean(wf.name, 0, 0)
-
-	wf.write()
-}
-
-func (wf *WriteFile) write() {
+func (w *writer) write() {
 	go func() {
 		for {
 			select {
-			case _, ok := <-wf.data.Single():
+			case <-w.ctx.Done():
+				return
+			case _, ok := <-w.data.Single():
 				{
 					if !ok {
 						break
 					}
-
-					for v := wf.data.Pop(); v != nil; {
-						if err := wf.fileCheck(); err != nil {
-							fmt.Print("err", string(v.([]byte)))
-							continue
-						}
-
-						n, err := wf.fbs.write(v.([]byte))
-						if err != nil {
-							continue
-						}
-						wf.fbs.addSize(int64(n))
-
-						v = wf.data.Pop()
-					}
-
-					wf.data.SingleDown()
+					// write data into files
+					w.flush()
+					w.data.SingleDown()
 				}
 			}
 		}
 	}()
 }
 
-func (wf *WriteFile) fileCheck() error {
-	if wf.isMustRename(wf.fbs) {
-		return wf.fbs.rename(wf.model)
+func (w *writer) statisticsLogFiles() (fs []string, err error) {
+	var (
+		fis []os.FileInfo
+		re  *regexp.Regexp
+	)
+
+	if fis, err = ioutil.ReadDir(w.Dir); err != nil {
+		return
 	}
 
+	expr := `^` + w.Prefix + `(.[a-zA-Z\_0-9]+)@(.[a-zA-Z\_0-9]+)` + log_suffix + `$`
+	if re, err = regexp.Compile(expr); err != nil {
+		return
+	}
+
+	for _, fi := range fis {
+		if fi.IsDir() {
+			continue
+		}
+
+		if subs := re.FindAllString(fi.Name(), -1); 0 == len(subs) {
+			continue
+		}
+
+		fs = append(fs, fi.Name())
+	}
+
+	return
+}
+
+func (w *writer) fileCheck() error {
+	if !w.isMustRename(w.fbs) {
+		return nil
+	}
+
+	fs, err := w.statisticsLogFiles()
+	if err != nil {
+		return err
+	}
+
+	fb, err := newFileBean(w.Dir, w.Prefix)
+	if err != nil {
+		return err
+	}
+
+	// clean the files
+	if nums := len(fs) + 1 - w.MaxFileCount; nums > 0 {
+		for i := 0; i < nums; i++ {
+			os.RemoveAll(path.Join(w.Dir, fs[i]))
+		}
+	}
+
+	w.fbs = fb
 	return nil
 }
 
-func (wf *WriteFile) isMustRename(fb *fileBean) bool {
-	switch wf.model {
-	case MODEL_DAY:
-		t, _ := time.Parse(DATE_FORMAT, time.Now().Format(DATE_FORMAT))
-		if t.After(*fb._date) {
+func (w *writer) isMustRename(fb *fileBean) bool {
+	switch w.Model {
+	case DateModel:
+		if now().After(fb._date) {
 			return true
 		}
-	case MODEL_SIZE:
-		return fb.fileSize >= fb.maxFileSize
+	case SizeModel:
+		return fb.fileSize >= w.MaxSize
 	}
 	return false
 }
 
 type fileBean struct {
-	name     string
-	_date        *time.Time
-	_suffix      int
-	logFile      *os.File
-	fileSize     int64
-	maxFileSize  int64
-	maxFileCount int
+	path     string
+	_date    time.Time
+	fileSize int64
+	*os.File
 }
 
-func newFileBean(name string, maxSize int64, maxFileCount int) (fb *fileBean) {
-	t, _ := time.Parse(DATE_FORMAT, time.Now().Format(DATE_FORMAT))
-	fb = &fileBean{name: name, _date: &t, maxFileSize: maxSize, maxFileCount: maxFileCount}
-	fb.logFile, _ = os.OpenFile(name, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
+func newFileBean(dir, prefix string) (fb *fileBean, err error) {
+	fb = &fileBean{}
+	now := time.Now()
+	fb.path = path.Join(dir, prefix) + now.Format(DATE_DAY_FORMAT) + log_suffix
+
+	if fb._date, err = time.Parse(DATE_DAY_FORMAT, now.Format(DATE_DAY_FORMAT)); err != nil {
+		return
+	}
+
+	fb.File, err = ioutils.OpenFile(fb.path, "")
 	return
-}
-
-func (fb *fileBean) write(d []byte) (int, error) {
-	return fb.logFile.Write(d)
 }
 
 func (fb *fileBean) addSize(n int64) {
 	atomic.AddInt64(&fb.fileSize, n)
-}
-
-func (fb *fileBean) close() error {
-	return fb.logFile.Close()
-}
-
-func (fb *fileBean) rename(model int) error {
-	_ = fb.logFile.Close()
-	var nextFileName string
-
-	switch model {
-	case MODEL_DAY:
-		nextFileName = fmt.Sprint(fb.name, ".", fb._date.Format(DATE_FORMAT))
-	case MODEL_SIZE:
-		nextFileName = fmt.Sprint(fb.name, ".", fb.nextSuffix())
-		fb._suffix = fb.nextSuffix()
-	}
-
-	if isExist(nextFileName) {
-		if err := os.Remove(nextFileName); err != nil {
-			return err
-		}
-	}
-	err := os.Rename(fb.name, nextFileName)
-	if err != nil {
-		return err
-	}
-
-	t, _ := time.Parse(DATE_FORMAT, time.Now().Format(DATE_FORMAT))
-	fb._date = &t
-	if fb.logFile, err = os.OpenFile(fb.name, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666); err != nil {
-		return err
-	}
-	fb.fileSize = 0
-	return nil
-}
-
-func (fb *fileBean) nextSuffix() int {
-	return int(fb._suffix%int(fb.maxFileCount) + 1)
-}
-
-func isExist(name string) bool {
-	_, err := os.Stat(name)
-	return err == nil || os.IsExist(err)
-}
-
-func fileSize(file string) int64 {
-	f, e := os.Stat(file)
-	if e != nil {
-		fmt.Println(e.Error())
-		return 0
-	}
-	return f.Size()
 }
