@@ -3,6 +3,7 @@ package flogging
 import (
 	"context"
 	"github.com/redresseur/flogging/output"
+	"io"
 	"os"
 )
 
@@ -86,6 +87,12 @@ func WithMaxFileNum(num int) LoggingOption {
 	}
 }
 
+func WithLogLevel(level string) LoggingOption {
+	return func(log *LoggingFactory) {
+		log.level = level
+	}
+}
+
 func NewLoggingFactory(level string, name string, ops ...LoggingOption) *LoggingFactory {
 	return NewLoggingFactoryWithContext(context.Background(), level, name, ops...)
 }
@@ -100,6 +107,7 @@ func NewLoggingFactoryWithContext(ctx context.Context, level string, name string
 		maxFileNum:  DefaultMaxFileNum,
 		rootDir:     os.TempDir(),
 		ctx:         ctx,
+		log:         nil,
 	}
 
 	for _, op := range ops {
@@ -118,24 +126,33 @@ func (ls *LoggingFactory) Logger(name string) *FabricLogger {
 }
 
 func (ls *LoggingFactory) Initial() (err error) {
-	if ls.name != "" {
-		w, err := output.NewWriter(ls.ctx, &output.WriterConfig{
+	var (
+		w io.Writer = os.Stdout
+	)
+	if ls.rootDir != "" {
+		w, err = output.NewWriter(ls.ctx, &output.WriterConfig{
 			Dir:          ls.rootDir,
 			Prefix:       ls.name,
 			Model:        ls.model,
 			MaxSize:      ls.maxFileSize,
 			MaxFileCount: ls.maxFileNum,
 		})
-		ls.log, err = New(Config{LogSpec: ls.level, Writer: w, Format: ls.format})
-		if err != nil {
-			return err
-		}
-	} else {
-		ls.log, err = New(Config{LogSpec: ls.level, Format: ls.format})
-		if err != nil {
-			return err
-		}
+
 	}
 
-	return nil
+	if ls.log != nil {
+		ls.log, err = New(Config{LogSpec: ls.level, Writer: w, Format: ls.format})
+	} else {
+		ls.log.Apply(Config{LogSpec: ls.level, Writer: w, Format: ls.format})
+	}
+
+	return
+}
+
+func (ls *LoggingFactory) Apply(ops ...LoggingOption) error {
+	for _, op := range ops {
+		op(ls)
+	}
+
+	return ls.Initial()
 }
