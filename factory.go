@@ -2,14 +2,13 @@ package flogging
 
 import (
 	"context"
+	"github.com/redresseur/flogging/output"
 	"os"
 )
 
 const (
-	DateModel         = "date"
-	SizeModel         = "size"
-	DefaultMaxSize    = 5 * 1024 * 1024
-	DefaultMaxFileNum = 5
+	DefaultMaxSize    = 10 * 1024 * 1024
+	DefaultMaxFileNum = 10
 
 	DefaultLogFormat = "%{color}%{time:2006-01-02 15:04:05.000 MST}%{color} " +
 		"[%{module}][%{level:.4s}] [%{shortfunc}] \"%{message}\""
@@ -65,13 +64,13 @@ func WithRootDir(rootDir string) LoggingOption {
 
 func WithModuleDate() LoggingOption {
 	return func(log *LoggingFactory) {
-		log.model = DateModel
+		log.model = output.DateModel
 	}
 }
 
 func WithModuleSize() LoggingOption {
 	return func(log *LoggingFactory) {
-		log.model = SizeModel
+		log.model = output.SizeModel
 	}
 }
 
@@ -88,15 +87,19 @@ func WithMaxFileNum(num int) LoggingOption {
 }
 
 func NewLoggingFactory(level string, name string, ops ...LoggingOption) *LoggingFactory {
+	return NewLoggingFactoryWithContext(context.Background(), level, name, ops...)
+}
+
+func NewLoggingFactoryWithContext(ctx context.Context, level string, name string, ops ...LoggingOption) *LoggingFactory {
 	newLogger := &LoggingFactory{
 		level:       level,
 		name:        name,
 		format:      DefaultLogFormat,
-		model:       DateModel,
+		model:       output.DateModel,
 		maxFileSize: DefaultMaxSize,
 		maxFileNum:  DefaultMaxFileNum,
 		rootDir:     os.TempDir(),
-		ctx:         context.Background(),
+		ctx:         ctx,
 	}
 
 	for _, op := range ops {
@@ -116,7 +119,7 @@ func (ls *LoggingFactory) Logger(name string) *FabricLogger {
 
 func (ls *LoggingFactory) Initial() (err error) {
 	if ls.name != "" {
-		w, err := NewWriter(ls.ctx, &WriterConfig{
+		w, err := output.NewWriter(ls.ctx, &output.WriterConfig{
 			Dir:          ls.rootDir,
 			Prefix:       ls.name,
 			Model:        ls.model,

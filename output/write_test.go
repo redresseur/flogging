@@ -1,4 +1,4 @@
-package flogging
+package output
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"regexp"
 	"sync"
 	"testing"
 )
@@ -45,7 +46,7 @@ func TestWriter_Write(t *testing.T) {
 		testW.Write([]byte(fmt.Sprintf("TestWriter_Write %v\n", i)))
 	}
 
-	testW.(*writer).Sync()
+	testW.(*fileWriter).Sync()
 }
 
 func TestWriter_Write_Date(t *testing.T) {
@@ -55,12 +56,12 @@ func TestWriter_Write_Date(t *testing.T) {
 		testW.Write([]byte(fmt.Sprintf("TestWriter_Write %v\n", i)))
 	}
 
-	testW.(*writer).Sync()
+	testW.(*fileWriter).Sync()
 }
 
 func TestStatisticsLogFiles(t *testing.T) {
 	once.Do(writeTestInit)
-	testW.(*writer).statisticsLogFiles()
+	testW.(*fileWriter).statisticsLogFiles()
 }
 
 func BenchmarkWriter_Write(b *testing.B) {
@@ -70,7 +71,7 @@ func BenchmarkWriter_Write(b *testing.B) {
 	}
 
 	once.Do(func() {
-		testW.(*writer).Sync()
+		testW.(*fileWriter).Sync()
 	})
 }
 
@@ -84,7 +85,7 @@ func BenchmarkWriter_Write_Parallel(b *testing.B) {
 	})
 
 	once.Do(func() {
-		testW.(*writer).Sync()
+		testW.(*fileWriter).Sync()
 	})
 }
 
@@ -114,4 +115,16 @@ func BenchmarkWriter_File_Parallel(b *testing.B) {
 			fd.Write([]byte(fmt.Sprintf("TestWriter_Write\n")))
 		}
 	})
+}
+
+func TestReg(t *testing.T)  {
+	reg := regexp.MustCompile(`^([a-zA-Z0-9-]+)\_?([0-9]*).log$`)
+	example := "wangzhipeng-2019-08-09_163.log"
+	t.Log(reg.FindStringSubmatch(example))
+
+	example1 := "wangzhipeng.log"
+	t.Log(reg.FindAllStringSubmatch(example1, -1))
+
+	example2 := "wangzhipeng@16a.log"
+	t.Log(reg.FindAllStringSubmatch(example2, -1))
 }

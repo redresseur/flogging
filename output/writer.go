@@ -1,4 +1,4 @@
-package flogging
+package output
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"strconv"
 	"sync/atomic"
 	"time"
 )
@@ -18,6 +19,9 @@ const (
 	DATE_DAY_FORMAT    = "2006-01-02"
 	DATE_SECOND_FORMAT = "2006_01_02_15_04_05"
 	log_suffix         = `.log`
+
+	DateModel = "date"
+	SizeModel = "size"
 )
 
 func now() time.Time {
@@ -39,46 +43,67 @@ func NewWriter(ctx context.Context, config *WriterConfig) (w io.Writer, err erro
 		return
 	}
 
-	wt := &writer{
+	fw := &fileWriter{
 		//  the default of the signal capacity is 1
 		data:         structure.NewQueue(1),
 		WriterConfig: config,
 	}
 
 	wCtx, cancel := context.WithCancel(ctx)
-	wt.ctx = context.WithValue(wCtx, wt, cancel)
+	fw.ctx = context.WithValue(wCtx, fw, cancel)
 
-	if wt.fbs, err = newFileBean(wt.Dir, wt.Prefix); err != nil {
+	fw.statisticsLogFiles()
+	fw.index++
+	filePath := fmt.Sprintf("%s%s_%04d%s", path.Join(fw.Dir, fw.Prefix),
+		now().Format(DATE_DAY_FORMAT), fw.index, log_suffix)
+
+	if fw.fbs, err = newFileBean(filePath); err != nil {
 		return
 	}
 
-	wt.write()
-	return wt, nil
+	fw.write()
+	return fw, nil
 }
 
-type writer struct {
+func Close(w io.Writer) error {
+	if fw, ok := w.(*fileWriter); ok {
+		if v := fw.ctx.Value(fw); v != nil {
+			if cancel, ok := v.(context.CancelFunc); ok {
+				cancel()
+			}
+		}
+		if fw.fbs != nil && fw.fbs.File != nil {
+			return fw.fbs.Close()
+		}
+	}
+
+	return nil
+}
+
+type fileWriter struct {
 	data *structure.Queue
 	*WriterConfig
 	fileDate time.Time
 	fbs      *fileBean
+	index    int
 	ctx      context.Context
 }
 
-func (w *writer) Write(p []byte) (n int, err error) {
+func (fw *fileWriter) Write(p []byte) (n int, err error) {
 	buffer := make([]byte, len(p), len(p)+1)
 	copy(buffer, p)
-	w.data.Push(buffer)
-	w.data.SingleUP(false)
+	fw.data.Push(buffer)
+	fw.data.SingleUP(false)
 	return len(p), nil
 }
 
-func (w *writer) Sync() error {
-	w.data.SingleUP(true)
+func (fw *fileWriter) Sync() error {
+	fw.data.SingleUP(true)
 	return nil
 }
 
-func (w *writer) Close() error {
-	if v := w.ctx.Value(w); v != nil {
+func (fw *fileWriter) Close() error {
+	if v := fw.ctx.Value(fw); v != nil {
 		if cancel, ok := v.(context.CancelFunc); ok {
 			cancel()
 		}
@@ -87,56 +112,56 @@ func (w *writer) Close() error {
 	return nil
 }
 
-func (w *writer) flush() {
-	for v := w.data.Pop(); v != nil; {
-		if err := w.fileCheck(); err != nil {
+func (fw *fileWriter) flush() {
+	for v := fw.data.Pop(); v != nil; {
+		if err := fw.fileCheck(); err != nil {
 			fmt.Printf("[file.Check] failure: %v", err)
 			continue
 		}
 
-		n, err := w.fbs.Write(v.([]byte))
+		n, err := fw.fbs.Write(v.([]byte))
 		if err != nil {
 			fmt.Printf("[file.Write] failure: %v", err)
 			continue
 		}
-		w.fbs.addSize(int64(n))
-		v = w.data.Pop()
+		fw.fbs.addSize(int64(n))
+		v = fw.data.Pop()
 	}
 
 	return
 }
 
-func (w *writer) write() {
+func (fw *fileWriter) write() {
 	go func() {
 		for {
 			select {
-			case <-w.ctx.Done():
+			case <-fw.ctx.Done():
 				return
-			case _, ok := <-w.data.Single():
+			case _, ok := <-fw.data.Single():
 				{
 					if !ok {
 						break
 					}
 					// write data into files
-					w.flush()
-					w.data.SingleDown()
+					fw.flush()
+					fw.data.SingleDown()
 				}
 			}
 		}
 	}()
 }
 
-func (w *writer) statisticsLogFiles() (fs []string, err error) {
+func (fw *fileWriter) statisticsLogFiles() (fs []string, err error) {
 	var (
 		fis []os.FileInfo
 		re  *regexp.Regexp
 	)
 
-	if fis, err = ioutil.ReadDir(w.Dir); err != nil {
+	if fis, err = ioutil.ReadDir(fw.Dir); err != nil {
 		return
 	}
 
-	expr := `^` + w.Prefix + `(.[a-zA-Z\_0-9]+)@(.[a-zA-Z\_0-9]+)` + log_suffix + `$`
+	expr := `^` + fw.Prefix + `([a-zA-Z0-9-]+)\_?([0-9]*)` + log_suffix + `$`
 	if re, err = regexp.Compile(expr); err != nil {
 		return
 	}
@@ -146,8 +171,13 @@ func (w *writer) statisticsLogFiles() (fs []string, err error) {
 			continue
 		}
 
-		if subs := re.FindAllString(fi.Name(), -1); 0 == len(subs) {
+		if subs := re.FindStringSubmatch(fi.Name()); 0 == len(subs) {
 			continue
+		} else if len(subs) >= 3 {
+			index, _ := strconv.Atoi(subs[2])
+			if index > fw.index {
+				fw.index = index
+			}
 		}
 
 		fs = append(fs, fi.Name())
@@ -156,40 +186,44 @@ func (w *writer) statisticsLogFiles() (fs []string, err error) {
 	return
 }
 
-func (w *writer) fileCheck() error {
-	if !w.isMustRename(w.fbs) {
+func (fw *fileWriter) fileCheck() error {
+	if !fw.isMustRename(fw.fbs) {
 		return nil
 	}
 
-	fs, err := w.statisticsLogFiles()
+	fs, err := fw.statisticsLogFiles()
 	if err != nil {
 		return err
 	}
 
-	fb, err := newFileBean(w.Dir, w.Prefix)
-	if err != nil {
+	newPath := fmt.Sprintf("%s%s_%04d%s", path.Join(fw.Dir, fw.Prefix),
+		now().Format(DATE_DAY_FORMAT), fw.index, log_suffix)
+	if fb, err := newFileBean(newPath); err != nil {
 		return err
+	} else {
+		fw.fbs.Close()
+		fw.fbs = fb
+		fw.index++
 	}
 
 	// clean the files
-	if nums := len(fs) + 1 - w.MaxFileCount; nums > 0 {
+	if nums := len(fs) + 1 - fw.MaxFileCount; nums > 0 {
 		for i := 0; i < nums; i++ {
-			os.RemoveAll(path.Join(w.Dir, fs[i]))
+			os.RemoveAll(path.Join(fw.Dir, fs[i]))
 		}
 	}
 
-	w.fbs = fb
 	return nil
 }
 
-func (w *writer) isMustRename(fb *fileBean) bool {
-	switch w.Model {
+func (fw *fileWriter) isMustRename(fb *fileBean) bool {
+	switch fw.Model {
 	case DateModel:
 		if now().After(fb._date) {
 			return true
 		}
 	case SizeModel:
-		return fb.fileSize >= w.MaxSize
+		return fb.fileSize >= fw.MaxSize
 	}
 	return false
 }
@@ -201,10 +235,10 @@ type fileBean struct {
 	*os.File
 }
 
-func newFileBean(dir, prefix string) (fb *fileBean, err error) {
+func newFileBean(path string) (fb *fileBean, err error) {
 	fb = &fileBean{}
 	now := time.Now()
-	fb.path = path.Join(dir, prefix) + now.Format(DATE_DAY_FORMAT) + log_suffix
+	fb.path = path
 
 	if fb._date, err = time.Parse(DATE_DAY_FORMAT, now.Format(DATE_DAY_FORMAT)); err != nil {
 		return
