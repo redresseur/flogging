@@ -47,17 +47,14 @@ func NewWriter(ctx context.Context, config *WriterConfig) (w io.Writer, err erro
 		//  the default of the signal capacity is 1
 		data:         structure.NewQueue(1),
 		WriterConfig: config,
+		index:        -1,
 	}
 
 	wCtx, cancel := context.WithCancel(ctx)
 	fw.ctx = context.WithValue(wCtx, fw, cancel)
 
 	fw.statisticsLogFiles()
-	fw.index++
-	filePath := fmt.Sprintf("%s%s_%04d%s", path.Join(fw.Dir, fw.Prefix),
-		now().Format(DATE_DAY_FORMAT), fw.index, log_suffix)
-
-	if fw.fbs, err = newFileBean(filePath); err != nil {
+	if fw.fbs, err = newFileBean(fw.generatePath()); err != nil {
 		return
 	}
 
@@ -170,22 +167,33 @@ func (fw *fileWriter) statisticsLogFiles() (fs []string, err error) {
 		if fi.IsDir() {
 			continue
 		}
-
+		// 1.  statistics the file index
 		if subs := re.FindStringSubmatch(fi.Name()); 0 == len(subs) {
 			continue
 		} else if len(subs) >= 3 {
-			index, _ := strconv.Atoi(subs[2])
-			if index > fw.index {
-				fw.index = index
+			if t, err := time.Parse(DATE_DAY_FORMAT, subs[1]); err != nil {
+				continue
+			} else if now().Equal(t) {
+				index, _ := strconv.Atoi(subs[2])
+				if index > fw.index {
+					fw.index = index
+				}
 			}
 		}
 
+		// 2. record the file name
 		fs = append(fs, fi.Name())
 	}
 
 	return
 }
 
+func (fw *fileWriter) generatePath() (string, time.Time) {
+	nt := now()
+	newPath := fmt.Sprintf("%s%s_%04d%s", path.Join(fw.Dir, fw.Prefix),
+		nt.Format(DATE_DAY_FORMAT), fw.index+1, log_suffix)
+	return newPath, nt
+}
 func (fw *fileWriter) fileCheck() error {
 	if !fw.isMustRename(fw.fbs) {
 		return nil
@@ -196,14 +204,11 @@ func (fw *fileWriter) fileCheck() error {
 		return err
 	}
 
-	newPath := fmt.Sprintf("%s%s_%04d%s", path.Join(fw.Dir, fw.Prefix),
-		now().Format(DATE_DAY_FORMAT), fw.index, log_suffix)
-	if fb, err := newFileBean(newPath); err != nil {
+	if fb, err := newFileBean(fw.generatePath()); err != nil {
 		return err
 	} else {
 		fw.fbs.Close()
 		fw.fbs = fb
-		fw.index++
 	}
 
 	// clean the files
@@ -235,15 +240,10 @@ type fileBean struct {
 	*os.File
 }
 
-func newFileBean(path string) (fb *fileBean, err error) {
+func newFileBean(path string, now time.Time) (fb *fileBean, err error) {
 	fb = &fileBean{}
-	now := time.Now()
+	fb._date = now
 	fb.path = path
-
-	if fb._date, err = time.Parse(DATE_DAY_FORMAT, now.Format(DATE_DAY_FORMAT)); err != nil {
-		return
-	}
-
 	fb.File, err = ioutils.OpenFile(fb.path, "")
 	return
 }

@@ -4,8 +4,9 @@ import (
 	"sync"
 	"testing"
 )
+
 var (
-	once sync.Once
+	once        sync.Once
 	testFactory *LoggingFactory
 )
 
@@ -13,7 +14,7 @@ func TestNewLoggingFactory(t *testing.T) {
 	//1. Create a new log server
 	testFactory = NewLoggingFactory("debug", "flogging",
 		WithModuleDate(), WithMaxFileSize(1024),
-		WithMaxFileNum(5), WithRootDir("./tmp"))
+		WithMaxFileNum(10), WithRootDir("./tmp"))
 	//2. Start writing files
 	err := testFactory.Initial()
 	if err != nil {
@@ -29,11 +30,10 @@ func TestNewLoggingFactory(t *testing.T) {
 	logger.Sync()
 }
 
-func factoryTestInit()  {
+func factoryTestInit() {
 	//1. Create a new log server
 	testFactory = NewLoggingFactory("debug", "flogging",
-		WithModuleSize(), WithMaxFileSize(1024),
-		WithMaxFileNum(5), WithRootDir("./tmp"))
+		WithModuleSize(), WithMaxFileNum(10), WithRootDir("./tmp"))
 	//2. Start writing files
 	err := testFactory.Initial()
 	if err != nil {
