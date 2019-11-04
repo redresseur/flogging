@@ -140,7 +140,7 @@ func (ls *LoggingFactory) Initial() (err error) {
 
 	}
 
-	if ls.log != nil {
+	if ls.log == nil {
 		ls.log, err = New(Config{LogSpec: ls.level, Writer: w, Format: ls.format})
 	} else {
 		ls.log.Apply(Config{LogSpec: ls.level, Writer: w, Format: ls.format})
