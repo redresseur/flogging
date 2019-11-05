@@ -6,9 +6,9 @@ import (
 	"github.com/redresseur/utils/ioutils"
 	"github.com/redresseur/utils/sturcture"
 	"io"
-	"io/ioutil"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"sync/atomic"
@@ -150,29 +150,24 @@ func (fw *fileWriter) write() {
 
 func (fw *fileWriter) statisticsLogFiles() (fs []string, err error) {
 	var (
-		fis []os.FileInfo
-		re  *regexp.Regexp
+		re *regexp.Regexp
 	)
-
-	if fis, err = ioutil.ReadDir(fw.Dir); err != nil {
-		return
-	}
 
 	expr := `^` + fw.Prefix + `([a-zA-Z0-9-]+)\_?([0-9]*)` + log_suffix + `$`
 	if re, err = regexp.Compile(expr); err != nil {
 		return
 	}
 
-	for _, fi := range fis {
-		if fi.IsDir() {
-			continue
+	filepath.Walk(fw.Dir, func(path string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			return nil
 		}
 		// 1.  statistics the file index
-		if subs := re.FindStringSubmatch(fi.Name()); 0 == len(subs) {
-			continue
+		if subs := re.FindStringSubmatch(info.Name()); 0 == len(subs) {
+			return nil
 		} else if len(subs) >= 3 {
 			if t, err := time.Parse(DATE_DAY_FORMAT, subs[1]); err != nil {
-				continue
+				return nil
 			} else if now().Equal(t) {
 				index, _ := strconv.Atoi(subs[2])
 				if index > fw.index {
@@ -182,8 +177,9 @@ func (fw *fileWriter) statisticsLogFiles() (fs []string, err error) {
 		}
 
 		// 2. record the file name
-		fs = append(fs, fi.Name())
-	}
+		fs = append(fs, path)
+		return nil
+	})
 
 	return
 }
@@ -194,6 +190,7 @@ func (fw *fileWriter) generatePath() (string, time.Time) {
 		nt.Format(DATE_DAY_FORMAT), fw.index+1, log_suffix)
 	return newPath, nt
 }
+
 func (fw *fileWriter) fileCheck() error {
 	if !fw.isMustRename(fw.fbs) {
 		return nil
@@ -214,7 +211,7 @@ func (fw *fileWriter) fileCheck() error {
 	// clean the files
 	if nums := len(fs) + 1 - fw.MaxFileCount; nums > 0 {
 		for i := 0; i < nums; i++ {
-			os.RemoveAll(path.Join(fw.Dir, fs[i]))
+			os.RemoveAll(fs[i])
 		}
 	}
 

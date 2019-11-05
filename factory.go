@@ -105,7 +105,7 @@ func NewLoggingFactoryWithContext(ctx context.Context, level string, name string
 		model:       output.DateModel,
 		maxFileSize: DefaultMaxSize,
 		maxFileNum:  DefaultMaxFileNum,
-		rootDir:     os.TempDir(),
+		rootDir:     "",
 		ctx:         ctx,
 		log:         nil,
 	}
