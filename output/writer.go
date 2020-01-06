@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/redresseur/utils/ioutils"
-	"github.com/redresseur/utils/sturcture"
+	"github.com/redresseur/utils/structure"
 	"io"
 	"os"
 	"path"
