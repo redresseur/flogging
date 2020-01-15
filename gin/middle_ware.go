@@ -66,15 +66,19 @@ func GinLoggerHandler(w io.Writer) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var content string
 		contentType := ctx.Request.Header.Get("Content-Type")
+
 		switch contentType {
 		case gin.MIMEJSON:
 			if data, err := ioutil.ReadAll(ctx.Request.Body); err != nil {
 				ctx.AbortWithError(http.StatusBadRequest, err)
 			} else {
-				content = string(data)
 				str := bytes.NewBuffer(nil)
-				json.Indent(str, []byte(data), "", "    ")
-				content = str.String()
+				err := json.Indent(str, []byte(data), "", "    ")
+				if err != nil {
+					content = string(data)
+				} else {
+					content = str.String()
+				}
 
 				// 此处很重要，否则后面处理请求的函数无法读取到Body数据
 				ctx.Request.Body = ioutil.NopCloser(bytes.NewBuffer(data))
