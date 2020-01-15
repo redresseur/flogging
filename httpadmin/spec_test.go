@@ -12,11 +12,11 @@ import (
 	"net/http/httptest"
 	"strings"
 
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
 	"github.com/redresseur/flogging"
 	"github.com/redresseur/flogging/httpadmin"
 	"github.com/redresseur/flogging/httpadmin/fakes"
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("SpecHandler", func() {

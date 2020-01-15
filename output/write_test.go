@@ -117,7 +117,7 @@ func BenchmarkWriter_File_Parallel(b *testing.B) {
 	})
 }
 
-func TestReg(t *testing.T)  {
+func TestReg(t *testing.T) {
 	reg := regexp.MustCompile(`^([a-zA-Z0-9-]+)\_?([0-9]*).log$`)
 	example := "wangzhipeng-2019-08-09_163.log"
 	t.Log(reg.FindStringSubmatch(example))

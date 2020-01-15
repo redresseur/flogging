@@ -13,9 +13,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/onsi/gomega/gbytes"
 	"github.com/redresseur/flogging"
 	"github.com/redresseur/flogging/fabenc"
-	"github.com/onsi/gomega/gbytes"
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"

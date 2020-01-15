@@ -12,8 +12,8 @@ import (
 	"os"
 	"sync"
 
-	"github.com/redresseur/flogging/fabenc"
 	logging "github.com/op/go-logging"
+	"github.com/redresseur/flogging/fabenc"
 	zaplogfmt "github.com/sykesm/zap-logfmt"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
