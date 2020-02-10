@@ -5,11 +5,110 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	uxml "github.com/redresseur/utils/xml"
 	"io"
 	"io/ioutil"
+	"mime"
 	"net/http"
 	"time"
 )
+
+const Content = `content`
+
+// dump: load the data from the body in requests.
+// support application/json, application/multipart-format
+func dump(ctx *gin.Context) {
+	var content string
+
+	contentType, _, err := mime.ParseMediaType(ctx.Request.Header.Get("Content-Type"))
+	if err != nil {
+		//ctx.AbortWithError(http.StatusBadRequest, err)
+		ctx.Next()
+	}
+
+	switch contentType {
+	case gin.MIMEJSON:
+		if data, err := ioutil.ReadAll(ctx.Request.Body); err != nil {
+			ctx.AbortWithError(http.StatusBadRequest, err)
+		} else {
+			buff := bytes.NewBuffer(nil)
+			err := json.Indent(buff, []byte(data), "", "    ")
+			if err != nil {
+				content = string(data)
+			} else {
+				content = buff.String()
+			}
+
+			// 此处很重要，否则后面处理请求的函数无法读取到Body数据
+			ctx.Request.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+		}
+	case gin.MIMEXML:
+		fallthrough
+	case gin.MIMEXML2:
+		{
+			if data, err := ioutil.ReadAll(ctx.Request.Body); err != nil {
+				ctx.AbortWithError(http.StatusBadRequest, err)
+			} else {
+				content = uxml.FormatXML(string(data), "", "	")
+				// 此处很重要，否则后面处理请求的函数无法读取到Body数据
+				ctx.Request.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+			}
+		}
+	case gin.MIMEPOSTForm:
+		{
+			if data, err := ioutil.ReadAll(ctx.Request.Body); err != nil {
+				ctx.AbortWithError(http.StatusBadRequest, err)
+			} else {
+				// TODO
+				content = string(data)
+				// 此处很重要，否则后面处理请求的函数无法读取到Body数据
+				ctx.Request.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+			}
+
+		}
+	case gin.MIMEMultipartPOSTForm:
+		{
+			// 多重表單中可能包含二進制文件，暫時先不處理
+			// TODO
+		}
+	case gin.MIMEPlain:
+		{
+			if data, err := ioutil.ReadAll(ctx.Request.Body); err != nil {
+				ctx.AbortWithError(http.StatusBadRequest, err)
+			} else {
+				// TODO
+				content = string(data)
+				// 此处很重要，否则后面处理请求的函数无法读取到Body数据
+				ctx.Request.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+			}
+		}
+	case gin.MIMEYAML:
+		{
+			if data, err := ioutil.ReadAll(ctx.Request.Body); err != nil {
+				ctx.AbortWithError(http.StatusBadRequest, err)
+			} else {
+				// TODO
+				content = string(data)
+				// 此处很重要，否则后面处理请求的函数无法读取到Body数据
+				ctx.Request.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+			}
+		}
+	case gin.MIMEHTML:
+		{
+			if data, err := ioutil.ReadAll(ctx.Request.Body); err != nil {
+				ctx.AbortWithError(http.StatusBadRequest, err)
+			} else {
+				// TODO
+				content = string(data)
+				// 此处很重要，否则后面处理请求的函数无法读取到Body数据
+				ctx.Request.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+			}
+		}
+	default:
+	}
+
+	ctx.Request.Header.Set(Content, content)
+}
 
 func GinLoggerHandler(w io.Writer) gin.HandlerFunc {
 	formatter := func(params gin.LogFormatterParams) (output string) {
@@ -30,7 +129,7 @@ func GinLoggerHandler(w io.Writer) gin.HandlerFunc {
 			params.Latency = params.Latency - params.Latency%time.Second
 		}
 
-		content = params.Request.Header.Get("Request")
+		content = params.Request.Header.Get(Content)
 		header = fmt.Sprintf("[GIN] %v |%s %3d %s| %13v | %15s |%s %-7s %s %s\n",
 			params.TimeStamp.Format("2006/01/02 - 15:04:05"),
 			statusColor, params.StatusCode, resetColor,
@@ -64,29 +163,7 @@ func GinLoggerHandler(w io.Writer) gin.HandlerFunc {
 	})
 
 	return func(ctx *gin.Context) {
-		var content string
-		contentType := ctx.Request.Header.Get("Content-Type")
-
-		switch contentType {
-		case gin.MIMEJSON:
-			if data, err := ioutil.ReadAll(ctx.Request.Body); err != nil {
-				ctx.AbortWithError(http.StatusBadRequest, err)
-			} else {
-				str := bytes.NewBuffer(nil)
-				err := json.Indent(str, []byte(data), "", "    ")
-				if err != nil {
-					content = string(data)
-				} else {
-					content = str.String()
-				}
-
-				// 此处很重要，否则后面处理请求的函数无法读取到Body数据
-				ctx.Request.Body = ioutil.NopCloser(bytes.NewBuffer(data))
-			}
-		default:
-		}
-
-		ctx.Request.Header.Set("Request", content)
+		dump(ctx)
 		loggerFunc(ctx)
 	}
 }
